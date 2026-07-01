@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 import database as database
+import discord
 from bot import create_bot, logger as bot_logger
 
 # Setup logging

@@ -325,3 +325,21 @@ def acknowledge_messages(payload: dict, api_key: str = Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"Error acknowledging messages: {e}")
         return JSONResponse(status_code=500, content={"detail": str(e)})
+
+# Pulling / syncing room link updates back to desktop
+@app.get("/sync/rooms/pending")
+def get_pending_rooms(api_key: str = Depends(verify_api_key)):
+    try:
+        return database.get_pending_rooms()
+    except Exception as e:
+        logger.error(f"Error getting pending rooms: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+
+@app.post("/sync/rooms/acknowledge")
+def acknowledge_rooms(payload: dict, api_key: str = Depends(verify_api_key)):
+    try:
+        database.acknowledge_rooms(payload["ids"])
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error acknowledging rooms: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})

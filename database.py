@@ -31,7 +31,8 @@ def init_db():
                 discord_username VARCHAR(100),
                 discord_link_date DATE,
                 discord_link_status VARCHAR(50) DEFAULT 'Unlinked',
-                discord_link_code VARCHAR(50)
+                discord_link_code VARCHAR(50),
+                pending_desktop_sync BOOLEAN DEFAULT FALSE
             );
             """)
 
@@ -475,7 +476,8 @@ def link_room_discord(room_code: str, discord_user_id: int, discord_username: st
                     SET discord_user_id = ?, 
                         discord_username = ?, 
                         discord_link_date = ?, 
-                        discord_link_status = 'Linked' 
+                        discord_link_status = 'Linked',
+                        pending_desktop_sync = 1
                     WHERE id = ?;
                 """, (str(discord_user_id), discord_username, datetime.now().strftime("%Y-%m-%d"), room["id"]))
                 conn2.commit()
@@ -557,3 +559,37 @@ def get_room_username_by_discord_id(discord_user_id: int) -> str:
         finally:
             conn.close()
     return f"discord_{discord_user_id}"
+
+def get_pending_rooms():
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, room_code, discord_user_id, discord_username, discord_link_status, discord_link_date FROM rooms WHERE pending_desktop_sync = 1;")
+        rows = cursor.fetchall()
+        rooms = []
+        for r in rows:
+            rooms.append({
+                "id": r[0],
+                "room_code": r[1],
+                "discord_user_id": r[2],
+                "discord_username": r[3],
+                "discord_link_status": r[4],
+                "discord_link_date": str(r[5])
+            })
+        return rooms
+    finally:
+        conn.close()
+
+def acknowledge_rooms(room_ids: list):
+    with db_lock:
+        conn = get_connection()
+        try:
+            placeholders = ",".join(["?"] * len(room_ids))
+            conn.execute(f"UPDATE rooms SET pending_desktop_sync = 0 WHERE id IN ({placeholders});", room_ids)
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            raise e
+        finally:
+            conn.close()
+

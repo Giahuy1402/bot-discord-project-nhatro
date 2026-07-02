@@ -31,9 +31,28 @@ app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
 
 bot_client = create_bot()
 
+def cleanup_old_uploads(directory: str, max_age_days: int = 30):
+    try:
+        now = time.time()
+        cutoff = now - (max_age_days * 86400)
+        if os.path.exists(directory):
+            count = 0
+            for filename in os.listdir(directory):
+                file_path = os.path.join(directory, filename)
+                if os.path.isfile(file_path):
+                    file_mtime = os.path.getmtime(file_path)
+                    if file_mtime < cutoff:
+                        os.remove(file_path)
+                        count += 1
+            if count > 0:
+                logger.info(f"Cleaned up {count} cached upload files older than {max_age_days} days.")
+    except Exception as e:
+        logger.error(f"Error during uploads cleanup: {e}")
+
 @app.on_event("startup")
 async def startup_event():
     database.init_db()
+    cleanup_old_uploads(UPLOAD_DIR, 30)
     token = os.environ.get("DISCORD_TOKEN")
     if token:
         # Start bot as background task in the event loop

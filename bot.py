@@ -704,7 +704,7 @@ class BotEvents(commands.Cog):
 
             # Save attachments
             if message.attachments:
-                attachments_dir = "uploads"
+                attachments_dir = os.environ.get("UPLOAD_DIR", "uploads")
                 os.makedirs(attachments_dir, exist_ok=True)
                 
                 for attachment in message.attachments:

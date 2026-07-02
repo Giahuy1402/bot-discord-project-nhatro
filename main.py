@@ -25,8 +25,9 @@ def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
     return x_api_key
 
 app = FastAPI(title="Gia Huy Home Sync Server")
-os.makedirs("uploads", exist_ok=True)
-app.mount("/files", StaticFiles(directory="uploads"), name="files")
+UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
 
 bot_client = create_bot()
 
@@ -159,7 +160,7 @@ async def sync_file(
 ):
     try:
         dest_filename = f"{int(time.time())}_{file.filename}"
-        dest_path = os.path.join("uploads", dest_filename)
+        dest_path = os.path.join(UPLOAD_DIR, dest_filename)
         with open(dest_path, 'wb') as f:
             f.write(await file.read())
             
@@ -235,7 +236,7 @@ async def send_invoice(request: Request, api_key: str = Depends(verify_api_key))
             file = form.get("file")
             if file:
                 filename = file.filename
-                pdf_path = os.path.join("uploads", f"invoice_{int(time.time())}_{filename}")
+                pdf_path = os.path.join(UPLOAD_DIR, f"invoice_{int(time.time())}_{filename}")
                 with open(pdf_path, 'wb') as f:
                     f.write(await file.read())
         else:
@@ -297,7 +298,7 @@ async def send_file(
         if not user:
             return JSONResponse(status_code=404, content={"detail": "Discord user not found"})
             
-        dest_path = os.path.join("uploads", f"file_{int(time.time())}_{file.filename}")
+        dest_path = os.path.join(UPLOAD_DIR, f"file_{int(time.time())}_{file.filename}")
         with open(dest_path, 'wb') as f:
             f.write(await file.read())
             

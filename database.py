@@ -3,7 +3,10 @@ import os
 import threading
 from datetime import datetime
 
-DB_FILE = "railway_bot.db"
+DB_FILE = os.environ.get("DB_PATH", "railway_bot.db")
+db_dir = os.path.dirname(DB_FILE)
+if db_dir:
+    os.makedirs(db_dir, exist_ok=True)
 db_lock = threading.Lock()
 
 def get_connection():

@@ -260,6 +260,40 @@ async def sync_upload(
         logger.error(f"Error uploading file: {e}")
         return JSONResponse(status_code=500, content={"detail": str(e)})
 
+@app.post("/sync/send_chat")
+async def send_chat_api(payload: dict, api_key: str = Depends(verify_api_key)):
+    try:
+        uid = int(payload["discord_user_id"])
+        content = payload["content"]
+        user = bot_client.get_user(uid) or await bot_client.fetch_user(uid)
+        if not user:
+            raise HTTPException(status_code=404, detail="Discord user not found")
+        await user.send(content=content)
+        logger.info(f"Forwarded direct send_chat to user {uid}: {content}")
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error in send_chat API: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+
+@app.post("/sync/send_notification")
+async def send_notification_api(payload: dict, api_key: str = Depends(verify_api_key)):
+    try:
+        uid = int(payload["discord_user_id"])
+        title = payload["title"]
+        content = payload["content"]
+        user = bot_client.get_user(uid) or await bot_client.fetch_user(uid)
+        if not user:
+            raise HTTPException(status_code=404, detail="Discord user not found")
+        
+        from bot import build_base_embed
+        embed = build_base_embed(title=title, description=content)
+        await user.send(embed=embed)
+        logger.info(f"Forwarded notification embed to user {uid}: {title}")
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error in send_notification API: {e}")
+        return JSONResponse(status_code=500, content={"detail": str(e)})
+
 # Direct send endpoint for invoices
 @app.post("/sync/send_invoice")
 async def send_invoice(

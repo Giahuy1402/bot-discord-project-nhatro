@@ -100,7 +100,7 @@ async def shutdown_event():
         logger.info("Discord Bot client closed.")
 
 @app.get("/health")
-def health_check(api_key: str = Depends(verify_api_key)):
+def health_check():
     rooms_count = database.get_linked_rooms_count()
     is_bot_online = bot_client.is_ready()
     return {

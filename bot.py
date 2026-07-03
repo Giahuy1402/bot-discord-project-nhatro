@@ -27,9 +27,9 @@ def broadcast_saved_message(bot, sender_username, receiver_username, message_con
     if hasattr(bot, 'ws_manager') and bot.ws_manager:
         conn = database.get_connection()
         try:
-            res = conn.execute("SELECT id, timestamp FROM messages WHERE discord_message_id = ?;", (discord_message_id,)).fetchone()
+            res = conn.execute("SELECT id, timestamp, api_key FROM messages WHERE discord_message_id = ?;", (discord_message_id,)).fetchone()
             if res:
-                msg_id, timestamp = res
+                msg_id, timestamp, api_key = res
                 payload = {
                     "type": "new_message",
                     "data": {
@@ -42,15 +42,15 @@ def broadcast_saved_message(bot, sender_username, receiver_username, message_con
                         "discord_message_id": discord_message_id
                     }
                 }
-                asyncio.create_task(bot.ws_manager.broadcast(payload))
+                asyncio.create_task(bot.ws_manager.send_to_landlord(api_key, payload))
         except Exception as e:
             logger.error(f"Error broadcasting WebSocket message: {e}")
         finally:
             conn.close()
 
-def broadcast_link_room(bot, room_code, discord_user_id, discord_username):
+def broadcast_link_room(bot, api_key, room_code, discord_user_id, discord_username):
     if hasattr(bot, 'ws_manager') and bot.ws_manager:
-        room = database.get_room_by_code(room_code)
+        room = database.get_room_by_code(api_key, room_code)
         if room:
             payload = {
                 "type": "room_linked",
@@ -63,7 +63,7 @@ def broadcast_link_room(bot, room_code, discord_user_id, discord_username):
                     "discord_link_date": datetime.now().strftime("%Y-%m-%d")
                 }
             }
-            asyncio.create_task(bot.ws_manager.broadcast(payload))
+            asyncio.create_task(bot.ws_manager.send_to_landlord(api_key, payload))
 
 def get_payment_info() -> Dict[str, str]:
     """Loads banking settings from environment variables."""
@@ -340,15 +340,17 @@ class LinkRoomModal(discord.ui.Modal, title="Liên kết tài khoản Phòng tr�
         await interaction.response.defer(ephemeral=True)
         
         username_disc = f"{interaction.user.name}#{interaction.user.discriminator}" if interaction.user.discriminator != "0" else interaction.user.name
-        success, message = database.link_room_discord(
+        success, message, api_key = database.link_room_discord(
             room_code=self.room_code.value.upper().strip(),
             discord_user_id=interaction.user.id,
             discord_username=username_disc,
-            link_code=self.link_code.value.strip()
+            link_code=self.link_code.value.strip(),
+            guild_id=str(interaction.guild_id) if interaction.guild_id else None,
+            guild_name=interaction.guild.name if interaction.guild else None
         )
         
         if success:
-            broadcast_link_room(interaction.client, self.room_code.value.upper().strip(), interaction.user.id, username_disc)
+            broadcast_link_room(interaction.client, api_key, self.room_code.value.upper().strip(), interaction.user.id, username_disc)
             embed = build_base_embed(
                 title="✅ Liên kết Thành công",
                 description=f"Tài khoản Discord **{interaction.user.name}** đã được liên kết thành công với phòng **{self.room_code.value.upper()}**.\n\n"
@@ -381,8 +383,10 @@ class SupportMessageModal(discord.ui.Modal, title="Gửi tin nhắn liên hệ c
     async def on_submit(self, interaction: discord.Interaction):
         content = self.message_content.value.strip()
         sender_username = database.get_room_username_by_discord_id(interaction.user.id) or f"phong_{self.room['room_number']}"
+        api_key = self.room.get("api_key")
         
         success = database.save_message_from_tenant(
+            api_key=api_key,
             sender_username=sender_username,
             receiver_username="admin",
             message_content=content,
@@ -520,14 +524,16 @@ class BotCommands(commands.Cog):
     async def slash_link(self, interaction: discord.Interaction, room_code: str, link_code: str):
         await interaction.response.defer(ephemeral=True)
         username_disc = f"{interaction.user.name}#{interaction.user.discriminator}" if interaction.user.discriminator != "0" else interaction.user.name
-        success, message = database.link_room_discord(
+        success, message, api_key = database.link_room_discord(
             room_code=room_code.upper().strip(),
             discord_user_id=interaction.user.id,
             discord_username=username_disc,
-            link_code=link_code.strip()
+            link_code=link_code.strip(),
+            guild_id=str(interaction.guild_id) if interaction.guild_id else None,
+            guild_name=interaction.guild.name if interaction.guild else None
         )
         if success:
-            broadcast_link_room(self.bot, room_code.upper().strip(), interaction.user.id, username_disc)
+            broadcast_link_room(self.bot, api_key, room_code.upper().strip(), interaction.user.id, username_disc)
             embed = build_base_embed(
                 title="✅ Liên kết Thành công",
                 description=f"Tài khoản Discord **{interaction.user.name}** đã được liên kết thành công với phòng **{room_code.upper()}**.\n\n"
@@ -657,27 +663,74 @@ class BotEvents(commands.Cog):
             
         self.bot.loop.create_task(self.check_and_deploy_control_panel())
 
+    @commands.Cog.listener()
+    async def on_guild_join(self, guild: discord.Guild):
+        logger.info(f"Bot joined a new guild: {guild.name} (ID: {guild.id})")
+        # Deploy control panel to this new guild
+        desc = """Chào mừng bạn đến với **GIA HUY HOME**!
+
+Created by Dev Gia Huy.
+
+Đây là Bảng điều khiển quản lý khách thuê cố định. Bạn có thể dễ dàng tra cứu mọi thông tin phòng bằng các nút bấm bên dưới.
+
+🔒 **Bước 1**: Nhấn nút **`🔗 Liên kết`** để xác minh phòng của bạn.
+🔑 **Bước 2**: Nhập **Mã phòng** và **Mã xác minh** (lấy tại phần mềm Desktop).
+🎯 **Bước 3**: Trải nghiệm các tính năng tự động dưới đây!
+
+• `📄 Hóa đơn`: Tra cứu hóa đơn dịch vụ tháng mới nhất.
+• `💰 Thanh toán`: Kiểm tra trạng thái nợ phí và thời hạn.
+• `⚡ Điện nước`: Xem chỉ số điện nước tiêu thụ.
+• `🏦 Chuyển khoản`: Nhận thông tin tài khoản và mã QR VietQR.
+• `💬 Liên hệ chủ trọ`: Gửi tin nhắn trực tiếp đến Desktop.
+• `👤 Hồ sơ`: Xem hợp đồng thuê và thông tin cá nhân.
+• `🔄 Làm mới`: Cập nhật lại trạng thái mới nhất."""
+        embed = build_base_embed(
+            title="🏠 GIA HUY HOME - BẢNG ĐIỀU KHIỂN KHÁCH THUÊ",
+            description=desc,
+            color=discord.Color.from_rgb(88, 101, 242)
+        )
+        view = PersistentControlPanelView()
+        
+        channel = discord.utils.get(guild.text_channels, name="nha-tro-bot")
+        if not channel:
+            try:
+                channel = await guild.create_text_channel(
+                    "nha-tro-bot",
+                    topic="Bảng điều khiển quản lý nhà trọ Gia Huy Home - Tra cứu hóa đơn, điện nước, thông tin cá nhân."
+                )
+                logger.info(f"Created channel #nha-tro-bot in guild {guild.name}")
+            except Exception as e:
+                logger.error(f"Failed to create channel #nha-tro-bot in new guild: {e}")
+                return
+
+        try:
+            await channel.purge(limit=20, check=lambda m: m.author.id == self.bot.user.id)
+            await channel.send(embed=embed, view=view)
+            logger.info(f"Deployed Control Panel to #{channel.name} in newly joined guild {guild.name}")
+        except Exception as e:
+            logger.error(f"Failed to deploy panel in channel of newly joined guild: {e}")
+
     async def check_and_deploy_control_panel(self):
         await self.bot.wait_until_ready()
         await asyncio.sleep(2)
         
-        # Load panel deploy guild from environment variables if specified, or scan all guilds
-        desc = (
-            "Chào mừng bạn đến với **GIA HUY HOME**!\n\n"
-            "Created by Dev Gia Huy.\n\n"
-            "Đây là Bảng điều khiển quản lý khách thuê cố định. "
-            "Bạn có thể dễ dàng tra cứu mọi thông tin phòng bằng các nút bấm bên dưới.\n\n"
-            "🔒 **Bước 1**: Nhấn nút **`🔗 Liên kết`** để xác minh phòng của bạn.\n"
-            "🔑 **Bước 2**: Nhập **Mã phòng** và **Mã xác minh** (lấy tại phần mềm Desktop).\n"
-            "🎯 **Bước 3**: Trải nghiệm các tính năng tự động dưới đây!\n\n"
-            "• `📄 Hóa đơn`: Tra cứu hóa đơn dịch vụ tháng mới nhất.\n"
-            "• `💰 Thanh toán`: Kiểm tra trạng thái nợ phí và thời hạn.\n"
-            "• `⚡ Điện nước`: Xem chỉ số điện nước tiêu thụ.\n"
-            "• `🏦 Chuyển khoản`: Nhận thông tin tài khoản và mã QR VietQR.\n"
-            "• `💬 Liên hệ chủ trọ`: Gửi tin nhắn trực tiếp đến Desktop.\n"
-            "• `👤 Hồ sơ`: Xem hợp đồng thuê và thông tin cá nhân.\n"
-            "• `🔄 Làm mới`: Cập nhật lại trạng thái mới nhất."
-        )
+        desc = """Chào mừng bạn đến với **GIA HUY HOME**!
+
+Created by Dev Gia Huy.
+
+Đây là Bảng điều khiển quản lý khách thuê cố định. Bạn có thể dễ dàng tra cứu mọi thông tin phòng bằng các nút bấm bên dưới.
+
+🔒 **Bước 1**: Nhấn nút **`🔗 Liên kết`** để xác minh phòng của bạn.
+🔑 **Bước 2**: Nhập **Mã phòng** và **Mã xác minh** (lấy tại phần mềm Desktop).
+🎯 **Bước 3**: Trải nghiệm các tính năng tự động dưới đây!
+
+• `📄 Hóa đơn`: Tra cứu hóa đơn dịch vụ tháng mới nhất.
+• `💰 Thanh toán`: Kiểm tra trạng thái nợ phí và thời hạn.
+• `⚡ Điện nước`: Xem chỉ số điện nước tiêu thụ.
+• `🏦 Chuyển khoản`: Nhận thông tin tài khoản và mã QR VietQR.
+• `💬 Liên hệ chủ trọ`: Gửi tin nhắn trực tiếp đến Desktop.
+• `👤 Hồ sơ`: Xem hợp đồng thuê và thông tin cá nhân.
+• `🔄 Làm mới`: Cập nhật lại trạng thái mới nhất."""
         embed = build_base_embed(
             title="🏠 GIA HUY HOME - BẢNG ĐIỀU KHIỂN KHÁCH THUÊ",
             description=desc,
@@ -698,16 +751,12 @@ class BotEvents(commands.Cog):
                     logger.error(f"Failed to create channel #nha-tro-bot: {e}")
                     continue
             
-            # Since settings are on Desktop, Railway bot just deletes old bot messages in the channel
-            # and sends a fresh control panel if not already present
             try:
-                # Delete old messages sent by bot in #nha-tro-bot
                 await channel.purge(limit=20, check=lambda m: m.author.id == self.bot.user.id)
                 await channel.send(embed=embed, view=view)
                 logger.info(f"Deployed Control Panel to #{channel.name} in {guild.name}")
             except Exception as e:
                 logger.error(f"Failed to deploy panel in channel: {e}")
-
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
@@ -730,6 +779,7 @@ class BotEvents(commands.Cog):
                 return
 
             sender_username = database.get_room_username_by_discord_id(message.author.id) or f"phong_{room['room_number']}"
+            api_key = room.get("api_key")
             
             saved_messages = []
             error_occurred = False
@@ -737,6 +787,7 @@ class BotEvents(commands.Cog):
             # Save text message
             if message.content.strip():
                 success = database.save_message_from_tenant(
+                    api_key=api_key,
                     sender_username=sender_username,
                     receiver_username="admin",
                     message_content=message.content,
@@ -795,6 +846,7 @@ class BotEvents(commands.Cog):
                         
                         # Store file relative path/URL
                         success = database.save_message_from_tenant(
+                            api_key=api_key,
                             sender_username=sender_username,
                             receiver_username="admin",
                             message_content=rel_path,

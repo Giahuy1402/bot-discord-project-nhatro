@@ -180,10 +180,20 @@ async def sync_message(msg: dict, api_key: str = Depends(verify_api_key)):
         receiver = msg["receiver_username"]
         conn = database.get_connection()
         try:
+            # Try multiple lookup strategies:
+            # 1. phong_X format  -> match room_number
+            # 2. room_code direct match
+            # 3. via users table for real usernames
             res = conn.execute("""
-                SELECT discord_user_id, discord_link_status FROM rooms 
-                WHERE ('phong_' || room_number) = ? OR room_code = ?;
-            """, (receiver, receiver)).fetchone()
+                SELECT r.discord_user_id, r.discord_link_status FROM rooms r
+                WHERE ('phong_' || r.room_number) = ?
+                   OR r.room_code = ?
+                UNION
+                SELECT r.discord_user_id, r.discord_link_status FROM rooms r
+                JOIN users u ON u.room_id = r.id AND u.role = 'User'
+                WHERE u.username = ?
+                LIMIT 1;
+            """, (receiver, receiver, receiver)).fetchone()
             
             if res and res[1] == 'Linked' and res[0]:
                 uid = int(res[0])
@@ -198,9 +208,6 @@ async def sync_message(msg: dict, api_key: str = Depends(verify_api_key)):
                         logger.info(f"Forwarded DM to tenant user {uid}: {m_content}")
                     elif m_type in ['file', 'image']:
                         # File path on Desktop must be served relative/absolute on server
-                        # In normal setup, the desktop app uploads the file to Railway first,
-                        # but in simple websocket setup, let's assume it's uploaded via /sync/upload endpoint
-                        # or we directly send the file from server local uploads directory
                         filename = os.path.basename(m_content)
                         file_path = os.path.join(UPLOAD_DIR, filename)
                         if os.path.exists(file_path):
@@ -208,7 +215,11 @@ async def sync_message(msg: dict, api_key: str = Depends(verify_api_key)):
                             await user.send(file=disc_file)
                             logger.info(f"Forwarded attachment to tenant user {uid}: {filename}")
                         else:
-                            logger.warning(f"File not found on server for WebSocket message: {file_path}")
+                            logger.warning(f"File not found on server for message: {file_path}")
+                else:
+                    logger.warning(f"Could not fetch Discord user {res[0]} - user may have left server")
+            else:
+                logger.info(f"No linked Discord room found for receiver '{receiver}' - message saved to DB only")
             return {"status": "success"}
         except Exception as err:
             logger.error(f"Error forwarding message to Discord user: {err}")
@@ -219,6 +230,7 @@ async def sync_message(msg: dict, api_key: str = Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"Error syncing message: {e}")
         return JSONResponse(status_code=500, content={"detail": str(e)})
+
 
 # Sync deletions
 @app.delete("/sync/{table}/{item_id}")

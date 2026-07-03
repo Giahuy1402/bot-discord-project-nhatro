@@ -17,28 +17,44 @@ def get_connection():
 
 def init_db():
     with db_lock:
+        # Step 1: Detect schema version in a clean, isolated connection
+        has_api_key = False
+        conn_detect = get_connection()
+        try:
+            cursor = conn_detect.cursor()
+            cursor.execute("SELECT api_key FROM rooms LIMIT 1;")
+            cursor.fetchall()
+            has_api_key = True
+        except sqlite3.OperationalError:
+            has_api_key = False
+        finally:
+            conn_detect.close() # Close connection completely to release any locks
+
+        # Step 2: If SaaS schema detected, drop tables in a separate fresh connection
+        if has_api_key:
+            print("SaaS database schema detected. Dropping tables to downgrade back to Single-Tenant schema...")
+            conn_drop = get_connection()
+            try:
+                conn_drop.execute("DROP TABLE IF EXISTS rooms;")
+                conn_drop.execute("DROP TABLE IF EXISTS users;")
+                conn_drop.execute("DROP TABLE IF EXISTS tenants;")
+                conn_drop.execute("DROP TABLE IF EXISTS contracts;")
+                conn_drop.execute("DROP TABLE IF EXISTS invoices;")
+                conn_drop.execute("DROP TABLE IF EXISTS payments;")
+                conn_drop.execute("DROP TABLE IF EXISTS messages;")
+                conn_drop.execute("DROP TABLE IF EXISTS landlord_guilds;")
+                conn_drop.commit()
+                print("Tables dropped. Re-creating Single-Tenant schema...")
+            except Exception as e:
+                conn_drop.rollback()
+                print(f"Error dropping tables: {e}")
+                raise e
+            finally:
+                conn_drop.close()
+
+        # Step 3: Initialize Single-Tenant schema
         conn = get_connection()
         try:
-            # Check if database has the SaaS schema (contains api_key column)
-            cursor = conn.cursor()
-            try:
-                cursor.execute("SELECT api_key FROM rooms LIMIT 1;")
-                has_api_key = True
-            except sqlite3.OperationalError:
-                has_api_key = False
-                
-            if has_api_key:
-                print("SaaS database schema detected. Dropping tables to downgrade back to Single-Tenant schema...")
-                conn.execute("DROP TABLE IF EXISTS rooms;")
-                conn.execute("DROP TABLE IF EXISTS users;")
-                conn.execute("DROP TABLE IF EXISTS tenants;")
-                conn.execute("DROP TABLE IF EXISTS contracts;")
-                conn.execute("DROP TABLE IF EXISTS invoices;")
-                conn.execute("DROP TABLE IF EXISTS payments;")
-                conn.execute("DROP TABLE IF EXISTS messages;")
-                conn.execute("DROP TABLE IF EXISTS landlord_guilds;")
-                conn.commit()
-                print("Tables dropped. Re-creating Single-Tenant schema...")
 
             conn.execute("""
             CREATE TABLE IF NOT EXISTS rooms (

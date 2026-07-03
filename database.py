@@ -20,6 +20,27 @@ def init_db():
     with db_lock:
         conn = get_connection()
         try:
+            # Check if database has the old schema (missing api_key in rooms)
+            cursor = conn.cursor()
+            try:
+                cursor.execute("SELECT api_key FROM rooms LIMIT 1;")
+                has_api_key = True
+            except sqlite3.OperationalError:
+                has_api_key = False
+                
+            if not has_api_key:
+                print("Old database schema detected. Performing automatic upgrade to Multi-Tenant SaaS schema...")
+                # We can safely drop tables because user approved database reset
+                conn.execute("DROP TABLE IF EXISTS rooms;")
+                conn.execute("DROP TABLE IF EXISTS users;")
+                conn.execute("DROP TABLE IF EXISTS tenants;")
+                conn.execute("DROP TABLE IF EXISTS contracts;")
+                conn.execute("DROP TABLE IF EXISTS invoices;")
+                conn.execute("DROP TABLE IF EXISTS payments;")
+                conn.execute("DROP TABLE IF EXISTS messages;")
+                conn.execute("DROP TABLE IF EXISTS landlord_guilds;")
+                conn.commit()
+                print("Old tables dropped. Re-creating with Multi-Tenant SaaS schema...")
             conn.execute("""
             CREATE TABLE IF NOT EXISTS rooms (
                 api_key VARCHAR(100) NOT NULL,

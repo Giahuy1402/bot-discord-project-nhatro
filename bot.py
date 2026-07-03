@@ -88,7 +88,8 @@ def build_invoice_embed(room: Dict[str, Any]) -> discord.Embed:
     """Builds the latest invoice embed."""
     room_id = room["id"]
     room_num = room["room_number"]
-    invoice = database.get_latest_invoice_by_room(room_id)
+    api_key = room.get("api_key")
+    invoice = database.get_latest_invoice_by_room(api_key, room_id)
     
     if not invoice:
         return build_base_embed(
@@ -125,7 +126,8 @@ def build_payment_embed(room: Dict[str, Any]) -> discord.Embed:
     """Builds the payment instructions and status embed."""
     room_id = room["id"]
     room_num = room["room_number"]
-    invoice = database.get_latest_invoice_by_room(room_id)
+    api_key = room.get("api_key")
+    invoice = database.get_latest_invoice_by_room(api_key, room_id)
     
     if not invoice:
         return build_base_embed(
@@ -153,7 +155,8 @@ def build_utilities_embed(room: Dict[str, Any]) -> discord.Embed:
     """Builds the utility metrics embed."""
     room_id = room["id"]
     room_num = room["room_number"]
-    invoice = database.get_latest_invoice_by_room(room_id)
+    api_key = room.get("api_key")
+    invoice = database.get_latest_invoice_by_room(api_key, room_id)
     
     if not invoice:
         return build_base_embed(
@@ -188,7 +191,8 @@ def build_bank_embed(room: Optional[Dict[str, Any]] = None, amount_override: Opt
         if amount_override is not None:
             amount = amount_override
         else:
-            invoice = database.get_latest_invoice_by_room(room["id"])
+            api_key = room.get("api_key")
+            invoice = database.get_latest_invoice_by_room(api_key, room["id"]) if api_key else None
             if invoice:
                 amount = float(invoice["total_amount"])
     
@@ -217,7 +221,8 @@ def build_bank_embed(room: Optional[Dict[str, Any]] = None, amount_override: Opt
 def build_profile_embed(room: Dict[str, Any]) -> discord.Embed:
     """Builds the tenant profile details embed."""
     room_num = room["room_number"]
-    profile = database.get_tenant_profile_by_room(room["id"])
+    api_key = room.get("api_key")
+    profile = database.get_tenant_profile_by_room(api_key, room["id"])
     
     if not profile:
         return build_base_embed(

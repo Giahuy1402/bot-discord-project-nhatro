@@ -1,4 +1,5 @@
 import sqlite3
+from typing import Optional
 import os
 import threading
 from datetime import datetime

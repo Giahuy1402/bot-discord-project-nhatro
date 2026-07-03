@@ -3,11 +3,11 @@ import json
 import time
 import logging
 import asyncio
-from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, Form, Request
+from fastapi import FastAPI, Depends, Header, HTTPException, UploadFile, File, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 import database as database
 import discord
@@ -16,6 +16,34 @@ from bot import create_bot, logger as bot_logger
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("railway_api")
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"WebSocket client connected. Total connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        logger.info(f"WebSocket client disconnected. Remaining connections: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        if not self.active_connections:
+            return
+        logger.info(f"Broadcasting message to {len(self.active_connections)} client(s): {message.get('type')}")
+        # Loop through a copy of the list because elements can be removed on disconnect
+        for connection in list(self.active_connections):
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending WebSocket message, disconnecting: {e}")
+                self.disconnect(connection)
+
+manager = ConnectionManager()
 
 # Verify API Key dependency
 def verify_api_key(x_api_key: str = Header(..., alias="X-API-Key")):
@@ -30,6 +58,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/files", StaticFiles(directory=UPLOAD_DIR), name="files")
 
 bot_client = create_bot()
+bot_client.ws_manager = manager
 
 def cleanup_old_uploads(directory: str, max_age_days: int = 30):
     try:
@@ -363,3 +392,24 @@ def acknowledge_rooms(payload: dict, api_key: str = Depends(verify_api_key)):
     except Exception as e:
         logger.error(f"Error acknowledging rooms: {e}")
         return JSONResponse(status_code=500, content={"detail": str(e)})
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, x_api_key: Optional[str] = None):
+    # Verify API Key
+    expected_key = os.environ.get("SYNC_API_KEY", "my_secret_api_key_2026")
+    if x_api_key != expected_key:
+        logger.warning("WebSocket connection rejected: Invalid API Key")
+        await websocket.close(code=4003)
+        return
+        
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive, listen for any messages from client (optional)
+            data = await websocket.receive_text()
+            logger.debug(f"Received text via WebSocket: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        manager.disconnect(websocket)
